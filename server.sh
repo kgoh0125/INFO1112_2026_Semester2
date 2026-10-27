@@ -1,8 +1,46 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #!/bin/bash
-
+# ---------------------------------------------------------------------------
+# INFO1112 Assignment 2 -- server.sh
+#
+# AI ACKNOWLEDGMENT
+# This script was developed with the assistance of an AI tool (Claude, by
+# Anthropic). In particular, AI was used to generate the Python/matplotlib
+# code that draws population.png (as permitted by the assignment sheet) and
+# to help write and debug the offline POI ("where am I?") lookup, the
+# per-client-IP locking, and the port-discovery code. All code was reviewed
+# and tested by the author in the Alpine container.
+# ---------------------------------------------------------------------------
+ 
 set -u
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # "Where am I?" -- neighbouring points of interest (POIs).
 # Works fully offline: a small Sydney POI dataset (name|category|lat|lon) is
@@ -13,7 +51,7 @@ set -u
 poi_lookup() {
     local query="${1//[\"\\]/}"          # strip characters that would break JSON
     local radius="${POI_RADIUS:-1000}"   # search radius in metres
-
+ 
     awk -F'|' -v q="$query" -v radius="$radius" '
     function rad(x) { return x * 3.14159265358979 / 180 }
     function hav(la1, lo1, la2, lo2,   dla, dlo, a) {
@@ -37,7 +75,7 @@ poi_lookup() {
             if (found) { oname = nm[self]; olat = la[self]; olon = lo[self] }
         }
         if (!found) exit 2
-
+ 
         m = 0
         for (i = 1; i <= n; i++) {
             if (i == self) continue
@@ -50,7 +88,7 @@ poi_lookup() {
             while (j >= 1 && dist[j] > td) { idx[j+1] = idx[j]; dist[j+1] = dist[j]; j-- }
             idx[j+1] = ti; dist[j+1] = td
         }
-
+ 
         printf "{\n  \"query\": \"%s\",\n", q
         printf "  \"origin\": {\"name\": \"%s\", \"latitude\": %.6f, \"longitude\": %.6f},\n", oname, olat, olon
         printf "  \"radius_m\": %d,\n  \"count\": %d,\n  \"neighbours\": [", radius, m
@@ -102,64 +140,85 @@ Luna Park Sydney|attraction|-33.847900|151.210800
 Taronga Zoo|attraction|-33.843300|151.241100
 POI_DATA
 }
-
+ 
 # Handle one client connection.
 if [ "${1:-}" = "--handle" ]; then
-
+ 
     # Identify the client's IP address.
     CLIENT_IP="${SOCAT_PEERADDR:-unknown}"
     CLIENT_IP="${CLIENT_IP%:*}"
     CLIENT_IP="${CLIENT_IP//[^a-zA-Z0-9_.-]/_}"
-
+ 
     # Atomically acquire a lock for this client IP.
     LOCK_DIR="/tmp/info1112-lock-${CLIENT_IP}"
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
         printf '{"error":"Another request from your IP is already being processed."}\n'
         exit 1
     fi
-
+ 
     # Release the lock when this handler exits.
     trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
-
+ 
     IFS= read -r REQUEST || exit 1
-
+ 
     REQUEST=${REQUEST%$'\r'}
-
+ 
     echo "Request from ${SOCAT_PEERADDR:-unknown}: $REQUEST" >&2
-
+ 
     case "$REQUEST" in
-        assignment)
+        assignment|asssignment)
             URL="https://www.sydney.edu.au/units/INFO1112/2026-S2C-ND-CC"
-
+            SEARCH_KEY="Assignment 2"   # which assessment row to look for on the page
+ 
             if ! curl -fsSL "$URL" -o /tmp/assignment.html; then
                 printf '{"error":"Could not download assignment webpage."}\n'
                 exit 1
             fi
-
+ 
             # Convert HTML into readable text.
-            html2text -width 120 < /tmp/assignment.html \
-                > /tmp/assignment.txt
-
-            # Generate assignment.json.
-            python3 -c '
-import json
-
-with open("/tmp/assignment.txt", encoding="utf-8") as f:
-    text = f.read()
-
-with open("/tmp/assignment.json", "w", encoding="utf-8") as f:
-    json.dump({"assignment": text}, f, indent=2, ensure_ascii=False)
-'
-
+            if ! html2text -width 120 < /tmp/assignment.html \
+                > /tmp/assignment.txt 2>/dev/null; then
+                printf '{"error":"Could not convert the webpage to text (html2text)."}\n'
+                exit 1
+            fi
+ 
+            # Find the assessment row (the title line plus the next two lines).
+            LINE_NO=$(grep -n -m1 -- "$SEARCH_KEY" /tmp/assignment.txt | cut -d: -f1)
+            if [ -z "$LINE_NO" ]; then
+                printf '{"error":"Could not find %s on the unit page."}\n' "$SEARCH_KEY"
+                exit 1
+            fi
+            BLOCK=$(sed -n "${LINE_NO},$((LINE_NO + 2))p" /tmp/assignment.txt)
+ 
+            # Extract each field from the downloaded page (nothing is hardcoded).
+            A_TITLE=$(printf '%s\n' "$BLOCK" | grep -o 'Assignment [0-9]\+' | head -n1)
+            A_TOPIC=$(printf '%s\n' "$BLOCK" | sed -n 's/.*Programming task - \([A-Za-z]*\).*/\1/p' | head -n1)
+            A_POINTS=$(printf '%s\n' "$BLOCK" | grep -o '[0-9]\+%' | head -n1 | tr -d '%')
+            A_DUE=$(printf '%s\n' "$BLOCK" \
+                | grep -o 'Due date: [0-9]\{1,2\} [A-Za-z]\{3\} [0-9]\{4\} at [0-9]\{1,2\}:[0-9]\{2\}' \
+                | head -n1 | sed 's/^Due date: //; s/ at / /')
+ 
+            if [ -z "$A_TITLE" ] || [ -z "$A_TOPIC" ] || [ -z "$A_POINTS" ] || [ -z "$A_DUE" ]; then
+                printf '{"error":"Could not extract the assignment details from the page."}\n'
+                exit 1
+            fi
+ 
+            # Display the assignment information in the server terminal.
+            printf '%s\n' "$BLOCK" >&2
+ 
+            # Generate assignment.json from the extracted values.
+            printf '{\n    "title" : "%s",\n    "topic" : "%s",\n    "due_date" : "%s",\n    "points" : %s\n}\n' \
+                "$A_TITLE" "$A_TOPIC" "$A_DUE" "$A_POINTS" > /tmp/assignment.json
+ 
             # Send the JSON back through the TCP connection.
             cat /tmp/assignment.json
             ;;
-
-
+ 
+ 
         population)
             CSV="/tmp/STE_1.csv"
             PNG="/tmp/population.png"
-
+ 
             # Download the latest ABS state and territory data.
             if ! curl -fsSL \
                 "https://dbr.abs.gov.au/processedData/csv/STE_1.csv" \
@@ -167,7 +226,7 @@ with open("/tmp/assignment.json", "w", encoding="utf-8") as f:
                 printf '{"error":"Could not download population data."}\n'
                 exit 1
             fi
-
+ 
             # Extract the year headers and total population row.
             python3 - "$CSV" "$PNG" <<'PY'
 import csv
@@ -176,33 +235,33 @@ import json
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
+ 
 csv_path, png_path = sys.argv[1], sys.argv[2]
-
+ 
 with open(csv_path, newline="", encoding="utf-8-sig") as f:
     rows = list(csv.reader(f))
-
+ 
 headers = rows[0]
 population_row = next(
     row for row in rows if row and row[0] == "ERP_P_20"
 )
-
+ 
 years = []
 populations = []
-
+ 
 for i, header in enumerate(headers):
     if header.isdigit() and i < len(population_row):
         value = population_row[i].strip()
         if value:
             years.append(int(header))
             populations.append(int(float(value)))
-
+ 
 if not years:
     raise SystemExit("No population data found.")
-
+ 
 latest_year = years[-1]
 latest_population = populations[-1]
-
+ 
 plt.figure(figsize=(9, 5))
 plt.plot(years, populations, marker="o")
 plt.title("Estimated Resident Population")
@@ -212,41 +271,41 @@ plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig(png_path, dpi=150)
 plt.close()
-
+ 
 PY
-
+ 
             if [ ! -f "$PNG" ]; then
                 printf '{"error":"Could not generate population graph."}\n'
                 exit 1
             fi
             # Calculate the PNG size for the response header.
             PNG_SIZE=$(wc -c < "$PNG" | tr -d ' ')
-
+ 
             # Send a JSON header containing the exact PNG size.
             python3 - "$CSV" "$PNG_SIZE" <<'PY'
 import csv
 import json
 import sys
-
+ 
 csv_path, png_size = sys.argv[1], int(sys.argv[2])
-
+ 
 with open(csv_path, newline="", encoding="utf-8-sig") as f:
     rows = list(csv.reader(f))
-
+ 
 headers = rows[0]
 row = next(r for r in rows if r and r[0] == "ERP_P_20")
-
+ 
 values = [
     (int(headers[i]), int(float(row[i])))
     for i in range(len(headers))
     if headers[i].isdigit() and i < len(row) and row[i].strip()
 ]
-
+ 
 year, population = values[-1]
-
+ 
 # Also show the latest population in the server terminal (stderr).
 print(f"Latest NSW population ({year}): {population:,}", file=sys.stderr)
-
+ 
 print(json.dumps({
     "year": year,
     "population": population,
@@ -255,47 +314,47 @@ print(json.dumps({
     "image_bytes": png_size 
 }))
 PY
-
+ 
             # Send the exact number of PNG bytes specified above.
             cat "$PNG"
             ;;
-
-
-
-
+ 
+ 
+ 
+ 
         poi\ *)
             # "poi <name>" or "poi <lat>,<lon>" -- answered from the offline dataset.
             POI_QUERY="${REQUEST#poi }"
-
+ 
             if [ -z "$POI_QUERY" ]; then
                 printf '{"error":"Usage: poi PLACE or poi LAT,LON"}\n'
                 exit 0
             fi
-
+ 
             if ! poi_lookup "$POI_QUERY"; then
                 printf '{"error":"POI not found: %s"}\n' "${POI_QUERY//[\"\\]/}"
             fi
             ;;
-
+ 
         *)
             printf '{"error":"Unknown request."}\n'
             ;;
     esac
-
+ 
     exit 0
 fi
-
+ 
 # Discover the container IP address.
 SERVER_IP=$(ifconfig eth0 | awk '
 /inet addr:/ {sub("addr:", "", $2); print $2; exit}
 /inet / && $2 !~ /addr:/ {print $2; exit}
 ')
-
+ 
 if [ -z "$SERVER_IP" ]; then
     echo "Error: Could not determine server IP."
     exit 1
 fi
-
+ 
 # Helper: list the TCP ports currently being listened on (ss -ltn).
 listening_ports() {
     if command -v ss >/dev/null 2>&1; then
@@ -304,43 +363,53 @@ listening_ports() {
         netstat -ltn 2>/dev/null
     fi | awk 'NR > 1 { n = split($4, a, ":"); if (a[n] ~ /^[0-9]+$/) print a[n] }' | sort -u
 }
-
+ 
 # Port the listener should ask for (Docker maps 1234 by default; override with
 # SERVER_PORT_REQUEST=<port> if needed). The port that is *reported* below is
 # not this value -- it is read back from ss -ltn once the server is listening.
 REQUESTED_PORT="${SERVER_PORT_REQUEST:-1234}"
 SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo /server.sh)"
-
+ 
 PORTS_BEFORE="$(listening_ports)"
-
-# Start the listener in the background; each client connection is passed to
-# the handler together with the client's IP address.
+ 
+# Refuse to start if something (e.g. an older server.sh) already uses the port.
+if printf '%s\n' "$PORTS_BEFORE" | grep -qx "$REQUESTED_PORT"; then
+    echo "Error: port ${REQUESTED_PORT} is already in use. Is another server.sh still running?"
+    echo "Stop it first (Ctrl+C in its terminal, or: pkill socat) and try again."
+    exit 1
+fi
+ 
+# Start the listener in the background. socat itself exports the client's IP
+# address to the handler as $SOCAT_PEERADDR (do not override it here).
 socat \
     "TCP-LISTEN:${REQUESTED_PORT},bind=0.0.0.0,reuseaddr,fork" \
-    "EXEC:env SOCAT_PEERADDR=\$SOCAT_PEERADDR /bin/bash $SCRIPT_PATH --handle" &
+    "EXEC:/bin/bash $SCRIPT_PATH --handle" &
 SOCAT_PID=$!
 trap 'kill "$SOCAT_PID" 2>/dev/null' EXIT INT TERM
-
+ 
 # Wait (up to ~5 s) for the new listening port to appear, then extract it.
 SERVER_PORT=""
+sleep 1
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-    sleep 0.5
     if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
         echo "Error: could not start the server (is port ${REQUESTED_PORT} already in use?)"
         exit 1
     fi
     SERVER_PORT="$(comm -13 <(printf '%s\n' "$PORTS_BEFORE") <(listening_ports) | head -n 1)"
     [ -n "$SERVER_PORT" ] && break
+    sleep 0.5
 done
-
+ 
 if [ -z "$SERVER_PORT" ]; then
     echo "Error: Could not determine the listening port."
     exit 1
 fi
-
+ 
 echo "Server IP: $SERVER_IP"
 echo "Server port: $SERVER_PORT"
 echo "Waiting for client requests..."
-
+ 
 # Keep running forever, waiting for requests.
 wait "$SOCAT_PID"
+ 
+Claude finished the response
