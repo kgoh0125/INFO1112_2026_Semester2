@@ -1,53 +1,5 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #!/bin/bash
-# ---------------------------------------------------------------------------
-# INFO1112 Assignment 2 -- server.sh
-#
-# AI ACKNOWLEDGMENT
-# This script was developed with the assistance of an AI tool (Claude, by
-# Anthropic). In particular, AI was used to generate the Python/matplotlib
-# code that draws population.png (as permitted by the assignment sheet) and
-# to help write and debug the offline POI ("where am I?") lookup, the
-# per-client-IP locking, and the port-discovery code. All code was reviewed
-# and tested by the author in the Alpine container.
-# ---------------------------------------------------------------------------
- 
 set -u
- 
- 
-# ---------------------------------------------------------------------------
-# "Where am I?" -- neighbouring points of interest (POIs).
-# Works fully offline: a small Sydney POI dataset (name|category|lat|lon) is
-# embedded below, so no external map API (e.g. Overpass) is needed.
-# The client sends a POI name ("Sydney Opera House") or coordinates
-# ("-33.857198,151.215123"); we reply with a JSON list of nearby POIs.
-# ---------------------------------------------------------------------------
 poi_lookup() {
     local query="${1//[\"\\]/}"          # strip characters that would break JSON
     local radius="${POI_RADIUS:-1000}"   # search radius in metres
