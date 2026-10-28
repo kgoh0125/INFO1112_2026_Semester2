@@ -1,4 +1,8 @@
-df952b1 (HEAD -> master) Add screenshots and population plot
+7d66ed0 (HEAD -> main, origin/main, origin/HEAD) Remove Assignment 1 files
+b792c01 Move Assignment 2 files into Assignment2 folder
+1a1ac75 Merge branch 'main' of https://github.com/kgoh0125/INFO1112_2026_Semester2
+ff3801d Add git commit log
+df952b1 Add screenshots and population plot
 19e59e1 Read population CSV in Bash, match Fig 3/6 output
 3d20a0b Extract assignment details from page into structured JSON
 4861d21 Extract assignment details from page into structured JSON
@@ -6,3 +10,7 @@ df952b1 (HEAD -> master) Add screenshots and population plot
 287322a Implement initial TCP request listener
 b9bdbcd Add initial server setup code
 9e525ed Create server script starter
+e9e3dd4 Add new folder for assignment 1
+6806abc My initial test plan was created
+f4936d0 NEW file added
+a453e79 Initial commit
