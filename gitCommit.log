@@ -1,0 +1,7 @@
+19e59e1 (HEAD -> master) Read population CSV in Bash, match Fig 3/6 output
+3d20a0b Extract assignment details from page into structured JSON
+4861d21 Extract assignment details from page into structured JSON
+48b993f Add offline POI lookup, port discovery via ss, population output
+287322a Implement initial TCP request listener
+b9bdbcd Add initial server setup code
+9e525ed Create server script starter
