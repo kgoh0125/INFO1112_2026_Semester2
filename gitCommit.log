@@ -1,4 +1,5 @@
-19e59e1 (HEAD -> master) Read population CSV in Bash, match Fig 3/6 output
+df952b1 (HEAD -> master) Add screenshots and population plot
+19e59e1 Read population CSV in Bash, match Fig 3/6 output
 3d20a0b Extract assignment details from page into structured JSON
 4861d21 Extract assignment details from page into structured JSON
 48b993f Add offline POI lookup, port discovery via ss, population output
