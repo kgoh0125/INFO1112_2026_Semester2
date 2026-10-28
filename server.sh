@@ -1,5 +1,18 @@
 #!/bin/bash
 set -u
+
+# Install any missing dependencies (Alpine only; parent process only).
+if [ "${1:-}" != "--handle" ]; then
+    _need=""
+    for _t in curl html2text socat python3 ifconfig ss; do
+        command -v "$_t" >/dev/null 2>&1 || _need=1
+    done
+    if [ -n "$_need" ] && command -v apk >/dev/null 2>&1; then
+        echo "Installing missing dependencies..."
+        apk add --no-cache curl html2text socat python3 py3-matplotlib \
+            net-tools iproute2 ca-certificates >/dev/null 2>&1
+    fi
+fi
 poi_lookup() {
     local query="${1//[\"\\]/}"          # strip characters that would break JSON
     local radius="${POI_RADIUS:-1000}"   # search radius in metres
@@ -101,6 +114,9 @@ if [ "${1:-}" = "--handle" ]; then
     CLIENT_IP="${CLIENT_IP%:*}"
     CLIENT_IP="${CLIENT_IP//[^a-zA-Z0-9_.-]/_}"
  
+    # Display the client's IP address and port (as in Fig. 6).
+    echo "Connection received on ${SOCAT_PEERADDR:-unknown} ${SOCAT_PEERPORT:-unknown}" >&2
+
     # Atomically acquire a lock for this client IP.
     LOCK_DIR="/tmp/info1112-lock-${CLIENT_IP}"
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -115,14 +131,14 @@ if [ "${1:-}" = "--handle" ]; then
  
     REQUEST=${REQUEST%$'\r'}
  
-    echo "Request from ${SOCAT_PEERADDR:-unknown}: $REQUEST" >&2
+    echo "Request: $REQUEST" >&2
  
     case "$REQUEST" in
         assignment|asssignment)
             URL="https://www.sydney.edu.au/units/INFO1112/2026-S2C-ND-CC"
             SEARCH_KEY="Assignment 2"   # which assessment row to look for on the page
  
-            if ! curl -fsSL "$URL" -o /tmp/assignment.html; then
+            if ! curl -fsSL --max-time 30 "$URL" -o /tmp/assignment.html; then
                 printf '{"error":"Could not download assignment webpage."}\n'
                 exit 1
             fi
@@ -170,110 +186,79 @@ if [ "${1:-}" = "--handle" ]; then
         population)
             CSV="/tmp/STE_1.csv"
             PNG="/tmp/population.png"
- 
+            rm -f "$PNG"
+
             # Download the latest ABS state and territory data.
-            if ! curl -fsSL \
+            if ! curl -fsSL --max-time 30 \
                 "https://dbr.abs.gov.au/processedData/csv/STE_1.csv" \
                 -o "$CSV"; then
                 printf '{"error":"Could not download population data."}\n'
                 exit 1
             fi
- 
-            # Extract the year headers and total population row.
-            python3 - "$CSV" "$PNG" <<'PY'
-import csv
+
+            # Read (year,population) from the CSV using Bash/awk.
+            # Row 1 holds the year headers; the ERP_P_20 row holds NSW's
+            # total population for each year column.
+            DATA=$(awk -F',' '
+                { gsub(/\r|"/, "") }
+                NR == 1 {
+                    for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) yr[i] = $i
+                    next
+                }
+                $1 == "ERP_P_20" {
+                    for (i = 1; i <= NF; i++)
+                        if ((i in yr) && $i ~ /^[0-9.]+$/) printf "%s,%.0f\n", yr[i], $i
+                }' "$CSV" | sort -t, -k1,1n)
+
+            if [ -z "$DATA" ]; then
+                printf '{"error":"Could not find NSW population data in the CSV."}\n'
+                exit 1
+            fi
+
+            # Latest (year,population) pair.
+            LATEST=$(printf '%s\n' "$DATA" | tail -n1)
+            LATEST_YEAR=${LATEST%,*}
+            LATEST_POP=${LATEST#*,}
+
+            # Display the latest population in the server terminal.
+            echo "Latest NSW population (${LATEST_YEAR}): ${LATEST_POP}" >&2
+
+            # Plot the data (data extraction above is done in Bash).
+            if ! printf '%s\n' "$DATA" | python3 -c '
 import sys
-import json
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
- 
-csv_path, png_path = sys.argv[1], sys.argv[2]
- 
-with open(csv_path, newline="", encoding="utf-8-sig") as f:
-    rows = list(csv.reader(f))
- 
-headers = rows[0]
-population_row = next(
-    row for row in rows if row and row[0] == "ERP_P_20"
-)
- 
-years = []
-populations = []
- 
-for i, header in enumerate(headers):
-    if header.isdigit() and i < len(population_row):
-        value = population_row[i].strip()
-        if value:
-            years.append(int(header))
-            populations.append(int(float(value)))
- 
-if not years:
-    raise SystemExit("No population data found.")
- 
-latest_year = years[-1]
-latest_population = populations[-1]
- 
+
+years, pops = [], []
+for line in sys.stdin:
+    y, p = line.strip().split(",")
+    years.append(int(y))
+    pops.append(int(p))
+
 plt.figure(figsize=(9, 5))
-plt.plot(years, populations, marker="o")
-plt.title("Estimated Resident Population")
+plt.plot(years, pops, marker="o")
+plt.title("NSW Estimated Resident Population")
 plt.xlabel("Year")
 plt.ylabel("Population")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig(png_path, dpi=150)
-plt.close()
- 
-PY
- 
-            if [ ! -f "$PNG" ]; then
+plt.savefig(sys.argv[1], dpi=150)
+' "$PNG" 2>/tmp/plot.err || [ ! -s "$PNG" ]; then
+                echo "Plot error: $(cat /tmp/plot.err)" >&2
                 printf '{"error":"Could not generate population graph."}\n'
                 exit 1
             fi
-            # Calculate the PNG size for the response header.
+
             PNG_SIZE=$(wc -c < "$PNG" | tr -d ' ')
- 
-            # Send a JSON header containing the exact PNG size.
-            python3 - "$CSV" "$PNG_SIZE" <<'PY'
-import csv
-import json
-import sys
- 
-csv_path, png_size = sys.argv[1], int(sys.argv[2])
- 
-with open(csv_path, newline="", encoding="utf-8-sig") as f:
-    rows = list(csv.reader(f))
- 
-headers = rows[0]
-row = next(r for r in rows if r and r[0] == "ERP_P_20")
- 
-values = [
-    (int(headers[i]), int(float(row[i])))
-    for i in range(len(headers))
-    if headers[i].isdigit() and i < len(row) and row[i].strip()
-]
- 
-year, population = values[-1]
- 
-# Also show the latest population in the server terminal (stderr).
-print(f"Latest NSW population ({year}): {population:,}", file=sys.stderr)
- 
-print(json.dumps({
-    "year": year,
-    "population": population,
-    "population_formatted": f"{population:,}",
-    "graph": "population.png",
-    "image_bytes": png_size 
-}))
-PY
- 
-            # Send the exact number of PNG bytes specified above.
+
+            # JSON header (with exact PNG size), then the PNG bytes.
+            printf '{"year":%s,"population":%s,"graph":"population.png","image_bytes":%s}\n' \
+                "$LATEST_YEAR" "$LATEST_POP" "$PNG_SIZE"
             cat "$PNG"
             ;;
- 
- 
- 
- 
+
+
         poi\ *)
             # "poi <name>" or "poi <lat>,<lon>" -- answered from the offline dataset.
             POI_QUERY="${REQUEST#poi }"
@@ -357,11 +342,8 @@ if [ -z "$SERVER_PORT" ]; then
     exit 1
 fi
  
-echo "Server IP: $SERVER_IP"
-echo "Server port: $SERVER_PORT"
-echo "Waiting for client requests..."
+echo "The server is running at $SERVER_IP, port=$SERVER_PORT"
+echo "Listening on 0.0.0.0 $SERVER_PORT"
  
 # Keep running forever, waiting for requests.
 wait "$SOCAT_PID"
- 
-Claude finished the response
