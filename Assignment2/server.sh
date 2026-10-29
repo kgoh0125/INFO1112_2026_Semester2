@@ -223,7 +223,9 @@ if [ "${1:-}" = "--handle" ]; then
             # Display the latest population in the server terminal.
             echo "Latest NSW population (${LATEST_YEAR}): ${LATEST_POP}" >&2
 
-            # Plot the data (data extraction above is done in Bash).
+            # AI ACKNOWLEDGEMENT: The Python (matplotlib) plotting code below was
+            # generated with AI assistance (Claude, Anthropic) and reviewed by me.
+            # All data extraction (year, population) from the CSV is done in Bash above.
             if ! printf '%s\n' "$DATA" | python3 -c '
 import sys
 import matplotlib
